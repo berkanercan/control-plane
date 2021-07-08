@@ -21,7 +21,8 @@ const (
 
 type Config struct {
 	URL                         string
-	Timeout                     time.Duration          `envconfig:"default=12h"`
+	ProvisioningTimeout         time.Duration          `envconfig:"default=6h"`
+	DeprovisioningTimeout       time.Duration          `envconfig:"default=5h"`
 	KubernetesVersion           string                 `envconfig:"default=1.16.9"`
 	DefaultGardenerShootPurpose string                 `envconfig:"default=development"`
 	MachineImage                string                 `envconfig:"optional"`
@@ -46,6 +47,7 @@ type RuntimeInput struct {
 
 	componentsDisabler        ComponentsDisabler
 	enabledOptionalComponents map[string]struct{}
+	oidcDefaultValues         internal.OIDCConfigDTO
 
 	trialNodesNumber int
 }
@@ -376,8 +378,15 @@ func (r *RuntimeInput) adjustRuntimeName() error {
 }
 
 func (r *RuntimeInput) configureOIDC() error {
-	if r.provisioningParameters.Parameters.OIDC == nil {
-		// TODO: read and use default values
+	if !r.provisioningParameters.Parameters.OIDC.IsProvided() {
+		r.provisionRuntimeInput.ClusterConfig.GardenerConfig.OidcConfig = &gqlschema.OIDCConfigInput{
+			ClientID:       r.oidcDefaultValues.ClientID,
+			GroupsClaim:    r.oidcDefaultValues.GroupsClaim,
+			IssuerURL:      r.oidcDefaultValues.IssuerURL,
+			SigningAlgs:    r.oidcDefaultValues.SigningAlgs,
+			UsernameClaim:  r.oidcDefaultValues.UsernameClaim,
+			UsernamePrefix: r.oidcDefaultValues.UsernamePrefix,
+		}
 		return nil
 	}
 	params := r.provisioningParameters.Parameters.OIDC

@@ -101,17 +101,18 @@ type Config struct {
 	Port       string `envconfig:"default=8080"`
 	StatusPort string `envconfig:"default=8071"`
 
-	Provisioning input.Config
-	Director     director.Config
-	Database     storage.Config
-	Gardener     gardener.Config
-	Kubeconfig   kubeconfig.Config
+	Provisioner input.Config
+	Director    director.Config
+	Database    storage.Config
+	Gardener    gardener.Config
+	Kubeconfig  kubeconfig.Config
 
 	ServiceManager servicemanager.Config
 
 	KymaVersion                          string
 	EnableOnDemandVersion                bool `envconfig:"default=false"`
 	ManagedRuntimeComponentsYAMLFilePath string
+	SkrOidcDefaultValuesYAMLFilePath     string
 	DefaultRequestRegion                 string `envconfig:"default=cf-eu10"`
 	UpdateProcessingEnabled              bool   `envconfig:"default=false"`
 
@@ -190,7 +191,7 @@ func main() {
 	health.NewServer(cfg.Host, cfg.StatusPort, logs).ServeAsync()
 
 	// create provisioner client
-	provisionerClient := provisioner.NewProvisionerClient(cfg.Provisioning.URL, cfg.DumpProvisionerRequests)
+	provisionerClient := provisioner.NewProvisionerClient(cfg.Provisioner.URL, cfg.DumpProvisionerRequests)
 
 	// create kubernetes client
 	k8sCfg, err := config.GetConfig()
@@ -249,8 +250,10 @@ func main() {
 	regions, err := provider.ReadPlatformRegionMappingFromFile(cfg.TrialRegionMappingFilePath)
 	fatalOnError(err)
 	logs.Infof("Platform region mapping for trial: %v", regions)
+	oidcDefaultValues, err := runtime.ReadOIDCDefaultValuesFromYAML(cfg.SkrOidcDefaultValuesYAMLFilePath)
+	fatalOnError(err)
 	inputFactory, err := input.NewInputBuilderFactory(optComponentsSvc, disabledComponentsProvider, runtimeProvider,
-		cfg.Provisioning, cfg.KymaVersion, regions, cfg.FreemiumProviders)
+		cfg.Provisioner, cfg.KymaVersion, regions, cfg.FreemiumProviders, oidcDefaultValues)
 	fatalOnError(err)
 
 	edpClient := edp.NewClient(cfg.EDP, logs.WithField("service", "edpClient"))
@@ -541,7 +544,7 @@ func NewProvisioningProcessingQueue(ctx context.Context, provisionManager *provi
 		},
 		{
 			stage: createRuntimeStageName,
-			step:  provisioning.NewInitialisationStep(db.Operations(), db.Instances(), inputFactory, cfg.Provisioning.Timeout, cfg.OperationTimeout, runtimeVerConfigurator, smcf),
+			step:  provisioning.NewInitialisationStep(db.Operations(), db.Instances(), inputFactory, cfg.Provisioner.ProvisioningTimeout, cfg.OperationTimeout, runtimeVerConfigurator, smcf),
 		},
 		{
 			stage: createRuntimeStageName,
@@ -633,11 +636,11 @@ func NewProvisioningProcessingQueue(ctx context.Context, provisionManager *provi
 		// check the runtime status
 		{
 			stage: checkRuntimeStageName,
-			step:  provisioning.NewCheckRuntimeStep(db.Operations(), provisionerClient, cfg.Provisioning.Timeout),
+			step:  provisioning.NewCheckRuntimeStep(db.Operations(), provisionerClient, cfg.Provisioner.ProvisioningTimeout),
 		},
 		{
 			stage: checkRuntimeStageName,
-			step:  provisioning.NewCheckDashboardURLStep(db.Operations(), directorClient, cfg.Provisioning.Timeout),
+			step:  provisioning.NewCheckDashboardURLStep(db.Operations(), directorClient, cfg.Provisioner.ProvisioningTimeout),
 		},
 		// post actions
 		{
@@ -728,7 +731,7 @@ func NewDeprovisioningProcessingQueue(ctx context.Context, workersAmount int, de
 		},
 		{
 			weight: 10,
-			step:   deprovisioning.NewRemoveRuntimeStep(db.Operations(), db.Instances(), provisionerClient),
+			step:   deprovisioning.NewRemoveRuntimeStep(db.Operations(), db.Instances(), provisionerClient, cfg.Provisioner.DeprovisioningTimeout),
 		},
 	}
 	for _, step := range deprovisioningSteps {
